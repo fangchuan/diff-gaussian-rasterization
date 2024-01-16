@@ -608,6 +608,7 @@ __global__ void preprocessCUDASpherical(
 	const glm::vec4* rotations,
 	const float scale_modifier,
 	const float* proj,
+	const float* view_matrix,
 	const glm::vec3* campos,
 	const float3* dL_dmean2D,
 	glm::vec3* dL_dmeans,
@@ -622,7 +623,7 @@ __global__ void preprocessCUDASpherical(
 		return;
 
 	float3 m = means[idx];
-
+	float3 m_view = transformPoint4x3(m, view_matrix);
 	// // Taking care of gradients from the screenspace points
 	// float4 m_hom = transformPoint4x4(m, proj);
 	// float m_w = 1.0f / (m_hom.w + 0.0000001f);
@@ -638,11 +639,11 @@ __global__ void preprocessCUDASpherical(
 	// dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
 
 	// depth
-	float r = sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
+	float r = sqrt(m_view.x * m_view.x + m_view.y * m_view.y + m_view.z * m_view.z);
 	// horizontal angle
-	float phi = atan2(m.x, m.y);
+	float phi = atan2(m_view.x, m_view.y);
 	// vertical angle
-	float theta = asin(m.z / r);
+	float theta = asin(m_view.z / r);
 	// spherical coordinate w.r.t point coordinate d(phi, theta)/d(x, y, z)
 	glm::mat3 J_sc_xyz = glm::mat3(
 		cos(phi) / (r * cos(theta)), -sin(phi) / (r * cos(theta)), 0.0f,
@@ -655,11 +656,13 @@ __global__ void preprocessCUDASpherical(
 	dL_dmean.x = dL_dmean2D[idx].x * J_sc_xyz[0][0] + dL_dmean2D[idx].y * J_sc_xyz[1][0];
 	dL_dmean.y = dL_dmean2D[idx].x * J_sc_xyz[0][1] + dL_dmean2D[idx].y * J_sc_xyz[1][1];
 	dL_dmean.z = dL_dmean2D[idx].y * J_sc_xyz[1][2];
-
+	// Account for transformation of mean to t
+	float3 dL_dmean_in_world = transformVec4x3Transpose({dL_dmean.x, dL_dmean.y, dL_dmean.z}, view_matrix);
 	
 	// That's the second part of the mean gradient. Previous computation
 	// of cov2D and following SH conversion also affects it.
-	dL_dmeans[idx] += dL_dmean;
+	// dL_dmeans[idx] += dL_dmean;
+	dL_dmeans[idx] += glm::vec3(dL_dmean_in_world.x, dL_dmean_in_world.y, dL_dmean_in_world.z);
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
@@ -927,6 +930,7 @@ void BACKWARD::preprocess(
 		(glm::vec4*)rotations,
 		scale_modifier,
 		projmatrix,
+		viewmatrix,
 		campos,
 		(float3*)dL_dmean2D,
 		(glm::vec3*)dL_dmean3D,
